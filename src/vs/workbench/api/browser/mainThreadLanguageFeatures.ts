@@ -56,6 +56,7 @@ export class MainThreadLanguageFeatures extends Disposable implements MainThread
 		@IUriIdentityService private readonly _uriIdentService: IUriIdentityService,
 		@IInstantiationService private readonly _instantiationService: IInstantiationService,
 		@IInlineCompletionsUnificationService private readonly _inlineCompletionsUnificationService: IInlineCompletionsUnificationService,
+		@IAiEditTelemetryService private readonly _aiEditTelemetryService: IAiEditTelemetryService,
 	) {
 		super();
 
@@ -136,7 +137,7 @@ export class MainThreadLanguageFeatures extends Disposable implements MainThread
 	private static _reviveWorkspaceSymbolDto(data: undefined): undefined;
 	private static _reviveWorkspaceSymbolDto(data: IWorkspaceSymbolDto | IWorkspaceSymbolDto[] | undefined): search.IWorkspaceSymbol | search.IWorkspaceSymbol[] | undefined {
 		if (!data) {
-			return <undefined>data;
+			return data;
 		} else if (Array.isArray(data)) {
 			data.forEach(MainThreadLanguageFeatures._reviveWorkspaceSymbolDto);
 			return <search.IWorkspaceSymbol[]>data;
@@ -222,7 +223,7 @@ export class MainThreadLanguageFeatures extends Disposable implements MainThread
 		this._registrations.set(handle, this._languageFeaturesService.codeLensProvider.register(selector, provider));
 	}
 
-	$emitCodeLensEvent(eventHandle: number, event?: any): void {
+	$emitCodeLensEvent(eventHandle: number, event?: unknown): void {
 		const obj = this._registrations.get(eventHandle);
 		if (obj instanceof Emitter) {
 			obj.fire(event);
@@ -314,7 +315,7 @@ export class MainThreadLanguageFeatures extends Disposable implements MainThread
 		this._registrations.set(handle, this._languageFeaturesService.inlineValuesProvider.register(selector, provider));
 	}
 
-	$emitInlineValuesEvent(eventHandle: number, event?: any): void {
+	$emitInlineValuesEvent(eventHandle: number, event?: unknown): void {
 		const obj = this._registrations.get(eventHandle);
 		if (obj instanceof Emitter) {
 			obj.fire(event);
@@ -549,8 +550,21 @@ export class MainThreadLanguageFeatures extends Disposable implements MainThread
 		}
 	}
 
-	$registerDocumentRangeSemanticTokensProvider(handle: number, selector: IDocumentFilterDto[], legend: languages.SemanticTokensLegend): void {
-		this._registrations.set(handle, this._languageFeaturesService.documentRangeSemanticTokensProvider.register(selector, new MainThreadDocumentRangeSemanticTokensProvider(this._proxy, handle, legend)));
+	$emitDocumentRangeSemanticTokensEvent(eventHandle: number): void {
+		const obj = this._registrations.get(eventHandle);
+		if (obj instanceof Emitter) {
+			obj.fire(undefined);
+		}
+	}
+
+	$registerDocumentRangeSemanticTokensProvider(handle: number, selector: IDocumentFilterDto[], legend: languages.SemanticTokensLegend, eventHandle: number | undefined): void {
+		let event: Event<void> | undefined = undefined;
+		if (typeof eventHandle === 'number') {
+			const emitter = new Emitter<void>();
+			this._registrations.set(eventHandle, emitter);
+			event = emitter.event;
+		}
+		this._registrations.set(handle, this._languageFeaturesService.documentRangeSemanticTokensProvider.register(selector, new MainThreadDocumentRangeSemanticTokensProvider(this._proxy, handle, legend, event)));
 	}
 
 	// --- suggest
@@ -639,21 +653,18 @@ export class MainThreadLanguageFeatures extends Disposable implements MainThread
 				return result;
 			},
 			handleItemDidShow: async (completions: IdentifiableInlineCompletions, item: IdentifiableInlineCompletion, updatedInsertText: string, editDeltaInfo: EditDeltaInfo): Promise<void> => {
-				this._instantiationService.invokeFunction(accessor => {
-					const aiEditTelemetryService = accessor.getIfExists(IAiEditTelemetryService);
-					if (item.suggestionId === undefined) {
-						item.suggestionId = aiEditTelemetryService?.createSuggestionId({
-							applyCodeBlockSuggestionId: undefined,
-							feature: 'inlineSuggestion',
-							source: providerId,
-							languageId: completions.languageId,
-							editDeltaInfo: editDeltaInfo,
-							modeId: undefined,
-							modelId: undefined,
-							presentation: item.isInlineEdit ? 'nextEditSuggestion' : 'inlineCompletion',
-						});
-					}
-				});
+				if (item.suggestionId === undefined) {
+					item.suggestionId = this._aiEditTelemetryService.createSuggestionId({
+						applyCodeBlockSuggestionId: undefined,
+						feature: 'inlineSuggestion',
+						source: providerId,
+						languageId: completions.languageId,
+						editDeltaInfo: editDeltaInfo,
+						modeId: undefined,
+						modelId: undefined,
+						presentation: item.isInlineEdit ? 'nextEditSuggestion' : 'inlineCompletion',
+					});
+				}
 
 				if (supportsHandleEvents) {
 					await this._proxy.$handleInlineCompletionDidShow(handle, completions.pid, item.idx, updatedInsertText);
@@ -681,32 +692,28 @@ export class MainThreadLanguageFeatures extends Disposable implements MainThread
 				}
 
 				if (reason.kind === languages.InlineCompletionEndOfLifeReasonKind.Accepted) {
-					this._instantiationService.invokeFunction(accessor => {
-						const aiEditTelemetryService = accessor.getIfExists(IAiEditTelemetryService);
-						if (item.suggestionId !== undefined) {
-							aiEditTelemetryService?.handleCodeAccepted({
-								suggestionId: item.suggestionId,
-								feature: 'inlineSuggestion',
-								source: providerId,
-								languageId: completions.languageId,
-								editDeltaInfo: EditDeltaInfo.tryCreate(
-									lifetimeSummary.lineCountModified,
-									lifetimeSummary.lineCountOriginal,
-									lifetimeSummary.characterCountModified,
-									lifetimeSummary.characterCountOriginal,
-								),
-								modeId: undefined,
-								modelId: undefined,
-								presentation: item.isInlineEdit ? 'nextEditSuggestion' : 'inlineCompletion',
-								acceptanceMethod: 'accept',
-								applyCodeBlockSuggestionId: undefined,
-							});
-						}
-					});
+					if (item.suggestionId !== undefined) {
+						this._aiEditTelemetryService.handleCodeAccepted({
+							suggestionId: item.suggestionId,
+							feature: 'inlineSuggestion',
+							source: providerId,
+							languageId: completions.languageId,
+							editDeltaInfo: EditDeltaInfo.tryCreate(
+								lifetimeSummary.lineCountModified,
+								lifetimeSummary.lineCountOriginal,
+								lifetimeSummary.characterCountModified,
+								lifetimeSummary.characterCountOriginal,
+							),
+							modeId: undefined,
+							modelId: undefined,
+							presentation: item.isInlineEdit ? 'nextEditSuggestion' : 'inlineCompletion',
+							acceptanceMethod: 'accept',
+							applyCodeBlockSuggestionId: undefined,
+						});
+					}
 				}
 
 				const endOfLifeSummary: InlineCompletionEndOfLifeEvent = {
-					id: lifetimeSummary.requestUuid,
 					opportunityId: lifetimeSummary.requestUuid,
 					correlationId: lifetimeSummary.correlationId,
 					shown: lifetimeSummary.shown,
@@ -719,7 +726,6 @@ export class MainThreadLanguageFeatures extends Disposable implements MainThread
 					viewKind: lifetimeSummary.viewKind,
 					preceeded: lifetimeSummary.preceeded,
 					requestReason: lifetimeSummary.requestReason,
-					error: lifetimeSummary.error,
 					typingInterval: lifetimeSummary.typingInterval,
 					typingIntervalCharacterCount: lifetimeSummary.typingIntervalCharacterCount,
 					languageId: lifetimeSummary.languageId,
@@ -952,7 +958,7 @@ export class MainThreadLanguageFeatures extends Disposable implements MainThread
 		this._registrations.set(handle, this._languageFeaturesService.foldingRangeProvider.register(selector, provider));
 	}
 
-	$emitFoldingRangeEvent(eventHandle: number, event?: any): void {
+	$emitFoldingRangeEvent(eventHandle: number, event?: unknown): void {
 		const obj = this._registrations.get(eventHandle);
 		if (obj instanceof Emitter) {
 			obj.fire(event);
@@ -997,7 +1003,7 @@ export class MainThreadLanguageFeatures extends Disposable implements MainThread
 				outgoing.forEach(value => {
 					value.to = MainThreadLanguageFeatures._reviveCallHierarchyItemDto(value.to);
 				});
-				// eslint-disable-next-line local/code-no-any-casts
+				// eslint-disable-next-line local/code-no-any-casts, @typescript-eslint/no-explicit-any
 				return <any>outgoing;
 			},
 			provideIncomingCalls: async (item, token) => {
@@ -1008,7 +1014,7 @@ export class MainThreadLanguageFeatures extends Disposable implements MainThread
 				incoming.forEach(value => {
 					value.from = MainThreadLanguageFeatures._reviveCallHierarchyItemDto(value.from);
 				});
-				// eslint-disable-next-line local/code-no-any-casts
+				// eslint-disable-next-line local/code-no-any-casts, @typescript-eslint/no-explicit-any
 				return <any>incoming;
 			}
 		}));
@@ -1349,6 +1355,7 @@ export class MainThreadDocumentRangeSemanticTokensProvider implements languages.
 		private readonly _proxy: ExtHostLanguageFeaturesShape,
 		private readonly _handle: number,
 		private readonly _legend: languages.SemanticTokensLegend,
+		public readonly onDidChange: Event<void> | undefined,
 	) {
 	}
 

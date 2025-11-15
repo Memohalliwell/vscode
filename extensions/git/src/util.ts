@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { Event, Disposable, EventEmitter, SourceControlHistoryItemRef, l10n, workspace, Uri, DiagnosticSeverity, env } from 'vscode';
+import { Event, Disposable, EventEmitter, SourceControlHistoryItemRef, l10n, workspace, Uri, DiagnosticSeverity, env, SourceControlHistoryItem } from 'vscode';
 import { dirname, normalize, sep, relative } from 'path';
 import { Readable } from 'stream';
 import { promises as fs, createReadStream } from 'fs';
@@ -41,11 +41,6 @@ export function combinedDisposable(disposables: IDisposable[]): IDisposable {
 }
 
 export const EmptyDisposable = toDisposable(() => null);
-
-export function fireEvent<T>(event: Event<T>): Event<T> {
-	// eslint-disable-next-line local/code-no-any-casts
-	return (listener: (e: T) => any, thisArgs?: any, disposables?: Disposable[]) => event(_ => (listener as any).call(thisArgs), null, disposables);
-}
 
 export function mapEvent<I, O>(event: Event<I>, map: (i: I) => O): Event<O> {
 	return (listener: (e: O) => any, thisArgs?: any, disposables?: Disposable[]) => event(i => listener.call(thisArgs, map(i)), null, disposables);
@@ -115,8 +110,8 @@ export function once(fn: (...args: any[]) => any): (...args: any[]) => any {
 
 export function assign<T>(destination: T, ...sources: any[]): T {
 	for (const source of sources) {
-		// eslint-disable-next-line local/code-no-any-casts
-		Object.keys(source).forEach(key => (destination as any)[key] = source[key]);
+		Object.keys(source).forEach(key =>
+			(destination as Record<string, unknown>)[key] = source[key]);
 	}
 
 	return destination;
@@ -800,6 +795,12 @@ export function getCommitShortHash(scope: Uri, hash: string): string {
 	const config = workspace.getConfiguration('git', scope);
 	const shortHashLength = config.get<number>('commitShortHashLength', 7);
 	return hash.substring(0, shortHashLength);
+}
+
+export function getHistoryItemDisplayName(historyItem: SourceControlHistoryItem): string {
+	return historyItem.references?.length
+		? historyItem.references[0].name
+		: historyItem.displayId ?? historyItem.id;
 }
 
 export type DiagnosticSeverityConfig = 'error' | 'warning' | 'information' | 'hint' | 'none';

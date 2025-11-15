@@ -21,6 +21,7 @@ import { ServicesAccessor } from '../../../../../../platform/instantiation/commo
 import { IQuickInputService, IQuickPickItem } from '../../../../../../platform/quickinput/common/quickInput.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../../../common/contributions.js';
 import { IEditorService } from '../../../../../services/editor/common/editorService.js';
+import { IWorkbenchLayoutService } from '../../../../../services/layout/browser/layoutService.js';
 import { IViewsService } from '../../../../../services/views/common/viewsService.js';
 import { IChatWidget, IChatWidgetService, showChatView } from '../../../../chat/browser/chat.js';
 import { IChatContextPicker, IChatContextPickerItem, IChatContextPickerPickItem, IChatContextPickService } from '../../../../chat/browser/chatContextPickService.js';
@@ -131,7 +132,7 @@ class NotebookChatContribution extends Disposable implements IWorkbenchContribut
 			return;
 		}
 
-		const variables = await selectedKernel.provideVariables(notebook.uri, undefined, 'named', 0, CancellationToken.None);
+		const variables = selectedKernel.provideVariables(notebook.uri, undefined, 'named', 0, CancellationToken.None);
 
 		for await (const variable of variables) {
 			if (pattern && !variable.name.toLowerCase().includes(pattern)) {
@@ -195,7 +196,7 @@ export class SelectAndInsertKernelVariableAction extends Action2 {
 			return;
 		}
 
-		const variables = await selectedKernel.provideVariables(notebook.uri, undefined, 'named', 0, CancellationToken.None);
+		const variables = selectedKernel.provideVariables(notebook.uri, undefined, 'named', 0, CancellationToken.None);
 
 		const quickPickItems: IQuickPickItem[] = [];
 		for await (const variable of variables) {
@@ -338,6 +339,7 @@ registerAction2(class CopyCellOutputAction extends Action2 {
 	async run(accessor: ServicesAccessor, outputContext: INotebookOutputActionContext | { outputViewModel: ICellOutputViewModel } | undefined): Promise<void> {
 		const notebookEditor = this.getNoteboookEditor(accessor.get(IEditorService), outputContext);
 		const viewService = accessor.get(IViewsService);
+		const layoutService = accessor.get(IWorkbenchLayoutService);
 
 		if (!notebookEditor) {
 			return;
@@ -389,7 +391,7 @@ registerAction2(class CopyCellOutputAction extends Action2 {
 			}
 
 			widget.attachmentModel.addContext(entry);
-			(await showChatView(viewService))?.focusInput();
+			(await showChatView(viewService, layoutService))?.focusInput();
 		}
 	}
 

@@ -1,4 +1,8 @@
 "use strict";
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -47,10 +51,6 @@ exports.scanBuiltinExtensions = scanBuiltinExtensions;
 exports.translatePackageJSON = translatePackageJSON;
 exports.webpackExtensions = webpackExtensions;
 exports.buildExtensionMedia = buildExtensionMedia;
-/*---------------------------------------------------------------------------------------------
- *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
- *--------------------------------------------------------------------------------------------*/
 const event_stream_1 = __importDefault(require("event-stream"));
 const fs_1 = __importDefault(require("fs"));
 const child_process_1 = __importDefault(require("child_process"));
@@ -151,7 +151,6 @@ function fromLocalWebpack(extensionPath, webpackConfigFileName, disableMangle) {
             path: filePath,
             stat: fs_1.default.statSync(filePath),
             base: extensionPath,
-            // eslint-disable-next-line local/code-no-any-casts
             contents: fs_1.default.createReadStream(filePath)
         }));
         // check for a webpack configuration files, then invoke webpack
@@ -236,7 +235,6 @@ function fromLocalNormal(extensionPath) {
             path: filePath,
             stat: fs_1.default.statSync(filePath),
             base: extensionPath,
-            // eslint-disable-next-line local/code-no-any-casts
             contents: fs_1.default.createReadStream(filePath)
         }));
         event_stream_1.default.readArray(files).pipe(result);

@@ -1,4 +1,8 @@
 "use strict";
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -38,10 +42,6 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CancellationToken = void 0;
 exports.createTypeScriptBuilder = createTypeScriptBuilder;
-/*---------------------------------------------------------------------------------------------
- *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
- *--------------------------------------------------------------------------------------------*/
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const crypto_1 = __importDefault(require("crypto"));
@@ -75,7 +75,6 @@ function createTypeScriptBuilder(config, projectFile, cmd) {
     host.getCompilationSettings().declaration = true;
     function file(file) {
         // support gulp-sourcemaps
-        // eslint-disable-next-line local/code-no-any-casts
         if (file.sourceMap) {
             emitSourceMapsInStream = false;
         }
@@ -96,8 +95,7 @@ function createTypeScriptBuilder(config, projectFile, cmd) {
         }
     }
     function isExternalModule(sourceFile) {
-        // eslint-disable-next-line local/code-no-any-casts
-        return sourceFile.externalModuleIndicator
+        return !!sourceFile.externalModuleIndicator
             || /declare\s+module\s+('|")(.+)\1/.test(sourceFile.getText());
     }
     function build(out, onError, token = CancellationToken.None) {
@@ -221,7 +219,6 @@ function createTypeScriptBuilder(config, projectFile, cmd) {
                                     if (didChange) {
                                         [tsSMC, inputSMC].forEach((consumer) => {
                                             consumer.sources.forEach((sourceFile) => {
-                                                // eslint-disable-next-line local/code-no-any-casts
                                                 smg._sources.add(sourceFile);
                                                 const sourceContent = consumer.sourceContentFor(sourceFile);
                                                 if (sourceContent !== null) {
@@ -237,7 +234,6 @@ function createTypeScriptBuilder(config, projectFile, cmd) {
                                         // });
                                     }
                                 }
-                                // eslint-disable-next-line local/code-no-any-casts
                                 vinyl.sourceMap = sourceMap;
                             }
                         }
@@ -521,7 +517,6 @@ class LanguageServiceHost {
         let result = this._snapshots[filename];
         if (!result && resolve) {
             try {
-                // eslint-disable-next-line local/code-no-any-casts
                 result = new VinylScriptSnapshot(new vinyl_1.default({
                     path: filename,
                     contents: fs_1.default.readFileSync(filename),

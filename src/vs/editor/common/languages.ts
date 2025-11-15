@@ -788,30 +788,34 @@ export interface InlineCompletion {
 	 * The text can also be a snippet. In that case, a preview with default parameters is shown.
 	 * When accepting the suggestion, the full snippet is inserted.
 	*/
-	readonly insertText: string | { snippet: string };
+	readonly insertText: string | { snippet: string } | undefined;
 
 	/**
-	 * A text that is used to decide if this inline completion should be shown.
-	 * An inline completion is shown if the text to replace is a subword of the filter text.
-	 */
-	readonly filterText?: string;
+	 * The range to replace.
+	 * Must begin and end on the same line.
+	 * Refers to the current document or `uri` if provided.
+	*/
+	readonly range?: IRange;
 
 	/**
 	 * An optional array of additional text edits that are applied when
 	 * selecting this completion. Edits must not overlap with the main edit
 	 * nor with themselves.
+	 * Refers to the current document or `uri` if provided.
 	 */
 	readonly additionalTextEdits?: ISingleEditOperation[];
 
 	/**
-	 * The range to replace.
-	 * Must begin and end on the same line.
+	 * The file for which the edit applies to.
 	*/
-	readonly range?: IRange;
+	readonly uri?: UriComponents;
 
+	/**
+	 * A command that is run upon acceptance of this item.
+	*/
 	readonly command?: Command;
 
-	readonly action?: Command;
+	readonly gutterMenuLinkAction?: Command;
 
 	/**
 	 * Is called the first time an inline completion is shown.
@@ -828,11 +832,12 @@ export interface InlineCompletion {
 	readonly isInlineEdit?: boolean;
 	readonly showInlineEditMenu?: boolean;
 
+	/** Only show the inline suggestion when the cursor is in the showRange. */
 	readonly showRange?: IRange;
 
 	readonly warning?: InlineCompletionWarning;
 
-	readonly displayLocation?: InlineCompletionDisplayLocation;
+	readonly hint?: InlineCompletionHint;
 
 	/**
 	 * Used for telemetry.
@@ -845,20 +850,19 @@ export interface InlineCompletionWarning {
 	icon?: IconPath;
 }
 
-export enum InlineCompletionDisplayLocationKind {
+export enum InlineCompletionHintStyle {
 	Code = 1,
 	Label = 2
 }
 
-export interface InlineCompletionDisplayLocation {
+export interface InlineCompletionHint {
+	/** Refers to the current document. */
 	range: IRange;
-	kind: InlineCompletionDisplayLocationKind;
-	label: string;
+	style: InlineCompletionHintStyle;
+	content: string;
 }
 
-/**
- * TODO: add `| URI | { light: URI; dark: URI }`.
-*/
+// TODO: add `| URI | { light: URI; dark: URI }`.
 export type IconPath = ThemeIcon;
 
 export interface InlineCompletions<TItem extends InlineCompletion = InlineCompletion> {
@@ -967,6 +971,17 @@ export class ProviderId {
 		}
 		return result;
 	}
+
+	toStringWithoutVersion(): string {
+		let result = '';
+		if (this.extensionId) {
+			result += this.extensionId;
+		}
+		if (this.providerId) {
+			result += `:${this.providerId}`;
+		}
+		return result;
+	}
 }
 
 /** @internal */
@@ -1022,7 +1037,6 @@ export type LifetimeSummary = {
 	notShownReason: string | undefined;
 	editorType: string;
 	viewKind: string | undefined;
-	error: string | undefined;
 	preceeded: boolean;
 	languageId: string;
 	requestReason: string;
@@ -2143,7 +2157,7 @@ export interface CommentWidget {
 	commentThread: CommentThread;
 	comment?: Comment;
 	input: string;
-	onDidChangeInput: Event<string>;
+	readonly onDidChangeInput: Event<string>;
 }
 
 /**
@@ -2173,19 +2187,19 @@ export interface CommentThread<T = IRange> {
 	label: string | undefined;
 	contextValue: string | undefined;
 	comments: ReadonlyArray<Comment> | undefined;
-	onDidChangeComments: Event<readonly Comment[] | undefined>;
+	readonly onDidChangeComments: Event<readonly Comment[] | undefined>;
 	collapsibleState?: CommentThreadCollapsibleState;
 	initialCollapsibleState?: CommentThreadCollapsibleState;
-	onDidChangeInitialCollapsibleState: Event<CommentThreadCollapsibleState | undefined>;
+	readonly onDidChangeInitialCollapsibleState: Event<CommentThreadCollapsibleState | undefined>;
 	state?: CommentThreadState;
 	applicability?: CommentThreadApplicability;
 	canReply: boolean | CommentAuthorInformation;
 	input?: CommentInput;
-	onDidChangeInput: Event<CommentInput | undefined>;
-	onDidChangeLabel: Event<string | undefined>;
-	onDidChangeCollapsibleState: Event<CommentThreadCollapsibleState | undefined>;
-	onDidChangeState: Event<CommentThreadState | undefined>;
-	onDidChangeCanReply: Event<boolean>;
+	readonly onDidChangeInput: Event<CommentInput | undefined>;
+	readonly onDidChangeLabel: Event<string | undefined>;
+	readonly onDidChangeCollapsibleState: Event<CommentThreadCollapsibleState | undefined>;
+	readonly onDidChangeState: Event<CommentThreadState | undefined>;
+	readonly onDidChangeCanReply: Event<boolean>;
 	isDisposed: boolean;
 	isTemplate: boolean;
 }
@@ -2268,6 +2282,7 @@ export interface Comment {
 	readonly commentReactions?: CommentReaction[];
 	readonly label?: string;
 	readonly mode?: CommentMode;
+	readonly state?: CommentState;
 	readonly timestamp?: string;
 }
 
@@ -2384,13 +2399,14 @@ export interface SemanticTokensEdits {
 }
 
 export interface DocumentSemanticTokensProvider {
-	onDidChange?: Event<void>;
+	readonly onDidChange?: Event<void>;
 	getLegend(): SemanticTokensLegend;
 	provideDocumentSemanticTokens(model: model.ITextModel, lastResultId: string | null, token: CancellationToken): ProviderResult<SemanticTokens | SemanticTokensEdits>;
 	releaseDocumentSemanticTokens(resultId: string | undefined): void;
 }
 
 export interface DocumentRangeSemanticTokensProvider {
+	readonly onDidChange?: Event<void>;
 	getLegend(): SemanticTokensLegend;
 	provideDocumentRangeSemanticTokens(model: model.ITextModel, range: Range, token: CancellationToken): ProviderResult<SemanticTokens>;
 }
@@ -2447,7 +2463,7 @@ export interface ITokenizationRegistry<TSupport> {
 	 *  - a tokenization support is registered, unregistered or changed.
 	 *  - the color map is changed.
 	 */
-	onDidChange: Event<ITokenizationSupportChangedEvent>;
+	readonly onDidChange: Event<ITokenizationSupportChangedEvent>;
 
 	/**
 	 * Fire a change event for a language.

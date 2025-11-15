@@ -25,7 +25,7 @@ import { Selection } from '../../../../common/core/selection.js';
 import { TextReplacement, TextEdit } from '../../../../common/core/edits/textEdit.js';
 import { TextLength } from '../../../../common/core/text/textLength.js';
 import { ScrollType } from '../../../../common/editorCommon.js';
-import { InlineCompletionEndOfLifeReasonKind, InlineCompletion, InlineCompletionTriggerKind, PartialAcceptTriggerKind, InlineCompletionsProvider, InlineCompletionCommand, InlineCompletions } from '../../../../common/languages.js';
+import { InlineCompletionEndOfLifeReasonKind, InlineCompletion, InlineCompletionTriggerKind, PartialAcceptTriggerKind, InlineCompletionsProvider, InlineCompletionCommand } from '../../../../common/languages.js';
 import { ILanguageConfigurationService } from '../../../../common/languages/languageConfigurationRegistry.js';
 import { EndOfLinePreference, IModelDeltaDecoration, ITextModel } from '../../../../common/model.js';
 import { TextModelText } from '../../../../common/model/textModelText.js';
@@ -64,6 +64,7 @@ export class InlineCompletionsModel extends Disposable {
 	// We use a semantic id to keep the same inline completion selected even if the provider reorders the completions.
 	private readonly _selectedInlineCompletionId = observableValue<string | undefined>(this, undefined);
 	public readonly primaryPosition = derived(this, reader => this._positions.read(reader)[0] ?? new Position(1, 1));
+	public readonly allPositions = derived(this, reader => this._positions.read(reader));
 
 	private _isAcceptingPartially = false;
 	private readonly _appearedInsideViewport = derived<boolean>(this, reader => {
@@ -72,14 +73,7 @@ export class InlineCompletionsModel extends Disposable {
 			return false;
 		}
 
-		const targetRange = state.inlineCompletion.targetRange;
-		const visibleRanges = this._editorObs.editor.getVisibleRanges();
-		if (visibleRanges.length < 1) {
-			return false;
-		}
-
-		const viewportRange = new Range(visibleRanges[0].startLineNumber, visibleRanges[0].startColumn, visibleRanges[visibleRanges.length - 1].endLineNumber, visibleRanges[visibleRanges.length - 1].endColumn);
-		return viewportRange.containsRange(targetRange);
+		return isSuggestionInViewport(this._editor, state.inlineCompletion);
 	});
 	public get isAcceptingPartially() { return this._isAcceptingPartially; }
 
@@ -101,6 +95,10 @@ export class InlineCompletionsModel extends Disposable {
 	private readonly _showOnSuggestConflict;
 	private readonly _suppressInSnippetMode;
 	private readonly _isInSnippetMode;
+
+	get editor() {
+		return this._editor;
+	}
 
 	constructor(
 		public readonly textModel: ITextModel,
@@ -440,7 +438,7 @@ export class InlineCompletionsModel extends Disposable {
 
 	// TODO: This is not an ideal implementation of excludesGroupIds, however as this is currently still behind proposed API
 	// and due to the time constraints, we are using a simplified approach
-	private getAvailableProviders(providers: InlineCompletionsProvider<InlineCompletions<InlineCompletion>>[]): InlineCompletionsProvider[] {
+	private getAvailableProviders(providers: InlineCompletionsProvider[]): InlineCompletionsProvider[] {
 		const suppressedProviderGroupIds = this._suppressedInlineCompletionGroupIds.get();
 		const unsuppressedProviders = providers.filter(provider => !(provider.groupId && suppressedProviderGroupIds.has(provider.groupId)));
 
@@ -449,7 +447,7 @@ export class InlineCompletionsModel extends Disposable {
 			provider.excludesGroupIds?.forEach(p => excludedGroupIds.add(p));
 		}
 
-		const availableProviders: InlineCompletionsProvider<InlineCompletions<InlineCompletion>>[] = [];
+		const availableProviders: InlineCompletionsProvider[] = [];
 		for (const provider of unsuppressedProviders) {
 			if (provider.groupId && excludedGroupIds.has(provider.groupId)) {
 				continue;
@@ -460,29 +458,29 @@ export class InlineCompletionsModel extends Disposable {
 		return availableProviders;
 	}
 
-	public async trigger(tx?: ITransaction, options?: { onlyFetchInlineEdits?: boolean; noDelay?: boolean }): Promise<void> {
+	public async trigger(tx?: ITransaction, options: { onlyFetchInlineEdits?: boolean; noDelay?: boolean; provider?: InlineCompletionsProvider; explicit?: boolean } = {}): Promise<void> {
 		subtransaction(tx, tx => {
-			if (options?.onlyFetchInlineEdits) {
+			if (options.onlyFetchInlineEdits) {
 				this._onlyRequestInlineEditsSignal.trigger(tx);
 			}
-			if (options?.noDelay) {
+			if (options.noDelay) {
 				this._noDelaySignal.trigger(tx);
 			}
 			this._isActive.set(true, tx);
+
+			if (options.explicit) {
+				this._inAcceptFlow.set(true, tx);
+				this._forceUpdateExplicitlySignal.trigger(tx);
+			}
+			if (options.provider) {
+				this._fetchSpecificProviderSignal.trigger(tx, options.provider);
+			}
 		});
 		await this._fetchInlineCompletionsPromise.get();
 	}
 
 	public async triggerExplicitly(tx?: ITransaction, onlyFetchInlineEdits: boolean = false): Promise<void> {
-		subtransaction(tx, tx => {
-			if (onlyFetchInlineEdits) {
-				this._onlyRequestInlineEditsSignal.trigger(tx);
-			}
-			this._isActive.set(true, tx);
-			this._inAcceptFlow.set(true, tx);
-			this._forceUpdateExplicitlySignal.trigger(tx);
-		});
-		await this._fetchInlineCompletionsPromise.get();
+		return this.trigger(tx, { onlyFetchInlineEdits, explicit: true });
 	}
 
 	public stop(stopReason: 'explicitCancel' | 'automatic' = 'automatic', tx?: ITransaction): void {
@@ -759,7 +757,7 @@ export class InlineCompletionsModel extends Disposable {
 			return false;
 		}
 
-		if (state.inlineCompletion.displayLocation) {
+		if (state.inlineCompletion.hint) {
 			return false;
 		}
 
@@ -931,7 +929,7 @@ export class InlineCompletionsModel extends Disposable {
 
 				editor.edit(edit, this._getMetadata(completion, this.textModel.getLanguageId()));
 
-				if (completion.displayLocation === undefined) {
+				if (completion.hint === undefined) {
 					// do not move the cursor when the completion is displayed in a different location
 					editor.setSelections(state.kind === 'inlineEdit' ? selections.slice(-1) : selections, 'inlineCompletionAccept');
 				}
@@ -1047,7 +1045,7 @@ export class InlineCompletionsModel extends Disposable {
 
 				editor.edit(TextEdit.fromParallelReplacementsUnsorted(edits), this._getMetadata(completion, type));
 				editor.setSelections(selections, 'inlineCompletionPartialAccept');
-				editor.revealPositionInCenterIfOutsideViewport(editor.getPosition()!, ScrollType.Immediate);
+				editor.revealPositionInCenterIfOutsideViewport(editor.getPosition()!, ScrollType.Smooth);
 			} finally {
 				this._isAcceptingPartially = false;
 			}
@@ -1111,13 +1109,15 @@ export class InlineCompletionsModel extends Disposable {
 			this._editor.setPosition(targetPosition, 'inlineCompletions.jump');
 
 			// TODO: consider using view information to reveal it
-			const isSingleLineChange = targetRange.isSingleLine() && (s.inlineCompletion.displayLocation || !s.inlineCompletion.insertText.includes('\n'));
+			const isSingleLineChange = targetRange.isSingleLine() && (s.inlineCompletion.hint || !s.inlineCompletion.insertText.includes('\n'));
 			if (isSingleLineChange) {
-				this._editor.revealPosition(targetPosition);
+				this._editor.revealPosition(targetPosition, ScrollType.Smooth);
 			} else {
 				const revealRange = new Range(targetRange.startLineNumber - 1, 1, targetRange.endLineNumber + 1, 1);
-				this._editor.revealRange(revealRange, ScrollType.Immediate);
+				this._editor.revealRange(revealRange, ScrollType.Smooth);
 			}
+
+			s.inlineCompletion.identity.setJumpTo(tx);
 
 			this._editor.focus();
 		});
@@ -1208,4 +1208,24 @@ class FadeoutDecoration extends Disposable {
 			}
 		}));
 	}
+}
+
+export function isSuggestionInViewport(editor: ICodeEditor, suggestion: InlineSuggestionItem, reader: IReader | undefined = undefined): boolean {
+	const targetRange = suggestion.targetRange;
+
+	// TODO make getVisibleRanges reactive!
+	observableCodeEditor(editor).scrollTop.read(reader);
+	const visibleRanges = editor.getVisibleRanges();
+
+	if (visibleRanges.length < 1) {
+		return false;
+	}
+
+	const viewportRange = new Range(
+		visibleRanges[0].startLineNumber,
+		visibleRanges[0].startColumn,
+		visibleRanges[visibleRanges.length - 1].endLineNumber,
+		visibleRanges[visibleRanges.length - 1].endColumn
+	);
+	return viewportRange.containsRange(targetRange);
 }

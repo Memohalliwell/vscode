@@ -47,7 +47,7 @@ import { ITextFileService } from '../../../services/textfile/common/textfiles.js
 import { ITerminalGroupService, ITerminalService } from '../../terminal/browser/terminal.js';
 import { ITerminalProfileResolverService } from '../../terminal/common/terminal.js';
 
-import { ConfiguringTask, ContributedTask, CustomTask, ExecutionEngine, InMemoryTask, InstancePolicy, ITaskEvent, ITaskIdentifier, ITaskInactiveEvent, ITaskProcessEndedEvent, ITaskSet, JsonSchemaVersion, KeyedTaskIdentifier, RerunAllRunningTasksCommandId, RuntimeType, Task, TASK_RUNNING_STATE, TaskDefinition, TaskEventKind, TaskGroup, TaskRunSource, TaskSettingId, TaskSorter, TaskSourceKind, TasksSchemaProperties, USER_TASKS_GROUP_KEY } from '../common/tasks.js';
+import { ConfiguringTask, ContributedTask, CustomTask, ExecutionEngine, InMemoryTask, InstancePolicy, ITaskConfig, ITaskEvent, ITaskIdentifier, ITaskInactiveEvent, ITaskProcessEndedEvent, ITaskSet, JsonSchemaVersion, KeyedTaskIdentifier, RerunAllRunningTasksCommandId, RuntimeType, Task, TASK_RUNNING_STATE, TaskDefinition, TaskEventKind, TaskGroup, TaskRunSource, TaskSettingId, TaskSorter, TaskSourceKind, TasksSchemaProperties, USER_TASKS_GROUP_KEY } from '../common/tasks.js';
 import { ChatAgentLocation, ChatModeKind } from '../../chat/common/constants.js';
 import { CustomExecutionSupportedContext, ICustomizationProperties, IProblemMatcherRunOptions, ITaskFilter, ITaskProvider, ITaskService, IWorkspaceFolderTaskResult, ProcessExecutionSupportedContext, ServerlessWebContext, ShellExecutionSupportedContext, TaskCommandsRegistered, TaskExecutionSupportedContext, TasksAvailableContext } from '../common/taskService.js';
 import { ITaskExecuteResult, ITaskResolver, ITaskSummary, ITaskSystem, ITaskSystemInfo, ITaskTerminateResponse, TaskError, TaskErrors, TaskExecuteKind, Triggers, VerifiedTask } from '../common/taskSystem.js';
@@ -96,6 +96,8 @@ import { FocusMode } from '../../../../platform/native/common/native.js';
 const QUICKOPEN_HISTORY_LIMIT_CONFIG = 'task.quickOpen.history';
 const PROBLEM_MATCHER_NEVER_CONFIG = 'task.problemMatchers.neverPrompt';
 const USE_SLOW_PICKER = 'task.quickOpen.showAll';
+
+const TaskTerminalType = 'Task';
 
 export namespace ConfigureTaskAction {
 	export const ID = 'workbench.action.tasks.configureTaskRunner';
@@ -444,18 +446,17 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 		this._waitForAllSupportedExecutions = new Promise(resolve => {
 			Event.once(this._onDidRegisterAllSupportedExecutions.event)(() => resolve());
 		});
-		if (this._terminalService.getReconnectedTerminals('Task')?.length) {
-			this._attemptTaskReconnection();
-		} else {
-			this._terminalService.whenConnected.then(() => {
-				if (this._terminalService.getReconnectedTerminals('Task')?.length) {
-					this._attemptTaskReconnection();
-				} else {
-					this._tasksReconnected = true;
-					this._onDidReconnectToTasks.fire();
-				}
-			});
-		}
+
+		this._terminalService.whenConnected.then(() => {
+			const reconnectedInstances = this._terminalService.instances.filter(e => e.reconnectionProperties?.ownerId === TaskTerminalType);
+			if (reconnectedInstances.length) {
+				this._attemptTaskReconnection();
+			} else {
+				this._tasksReconnected = true;
+				this._onDidReconnectToTasks.fire();
+			}
+		});
+
 		this._upgrade();
 	}
 
@@ -590,7 +591,7 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 	private async _registerCommands(): Promise<void> {
 		CommandsRegistry.registerCommand({
 			id: 'workbench.action.tasks.runTask',
-			handler: async (accessor, arg) => {
+			handler: async (accessor, arg?: string | ITaskIdentifier) => {
 				if (await this._trust()) {
 					await this._runTaskCommand(arg);
 				}
@@ -626,25 +627,25 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 			}
 		});
 
-		CommandsRegistry.registerCommand('workbench.action.tasks.reRunTask', async (accessor, arg) => {
+		CommandsRegistry.registerCommand('workbench.action.tasks.reRunTask', async (accessor) => {
 			if (await this._trust()) {
 				this._reRunTaskCommand();
 			}
 		});
 
-		CommandsRegistry.registerCommand('workbench.action.tasks.restartTask', async (accessor, arg) => {
+		CommandsRegistry.registerCommand('workbench.action.tasks.restartTask', async (accessor, arg?: string | ITaskIdentifier) => {
 			if (await this._trust()) {
 				this._runRestartTaskCommand(arg);
 			}
 		});
 
-		CommandsRegistry.registerCommand(RerunAllRunningTasksCommandId, async (accessor, arg) => {
+		CommandsRegistry.registerCommand(RerunAllRunningTasksCommandId, async (accessor) => {
 			if (await this._trust()) {
 				this._runRerunAllRunningTasksCommand();
 			}
 		});
 
-		CommandsRegistry.registerCommand('workbench.action.tasks.terminate', async (accessor, arg) => {
+		CommandsRegistry.registerCommand('workbench.action.tasks.terminate', async (accessor, arg?: string | ITaskIdentifier) => {
 			if (await this._trust()) {
 				this._runTerminateCommand(arg);
 			}
@@ -767,7 +768,7 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 		const result = await raceTimeout(
 			Promise.all(this._getActivationEvents(type).map(activationEvent => this._extensionService.activateByEvent(activationEvent))),
 			5000,
-			() => console.warn('Timed out activating extensions for task providers')
+			() => this._logService.warn('Timed out activating extensions for task providers')
 		);
 		if (result) {
 			this._activatedTaskProviders.add(type ?? 'all');
@@ -817,10 +818,9 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 
 
 						const defaultAgent = this._chatAgentService.getDefaultAgent(ChatAgentLocation.Chat);
-						const providerName = defaultAgent?.fullName;
-						if (providerName) {
+						if (defaultAgent) {
 							actions.push({
-								label: nls.localize('troubleshootWithChat', "Fix with {0}", providerName),
+								label: nls.localize('troubleshootWithChat', "Fix with AI"),
 								run: async () => {
 									this._commandService.executeCommand(CHAT_OPEN_ACTION_ID, {
 										mode: ChatModeKind.Agent,
@@ -2172,22 +2172,31 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 		if (!this._taskSystem) {
 			return;
 		}
-		const response = await this._taskSystem.terminate(task);
-		if (response.success) {
-			try {
-				// Before restarting, check if the task still exists and get updated version
-				const updatedTask = await this._findUpdatedTask(task);
-				if (updatedTask) {
-					await this.run(updatedTask);
-				} else {
-					// Task no longer exists, show warning
-					this._notificationService.warn(nls.localize('TaskSystem.taskNoLongerExists', 'Task {0} no longer exists or has been modified. Cannot restart.', task.configurationProperties.name));
-				}
-			} catch {
-				// eat the error, we don't care about it here
+
+		// Check if the task is currently running
+		const isTaskRunning = await this.getActiveTasks().then(tasks => tasks.some(t => t.getMapKey() === task.getMapKey()));
+
+		if (isTaskRunning) {
+			// Task is running, terminate it first
+			const response = await this._taskSystem.terminate(task);
+			if (!response.success) {
+				this._notificationService.warn(nls.localize('TaskSystem.restartFailed', 'Failed to terminate and restart task {0}', Types.isString(task) ? task : task.configurationProperties.name));
+				return;
 			}
-		} else {
-			this._notificationService.warn(nls.localize('TaskSystem.restartFailed', 'Failed to terminate and restart task {0}', Types.isString(task) ? task : task.configurationProperties.name));
+		}
+
+		// Task is not running or was successfully terminated, now run it
+		try {
+			// Before restarting, check if the task still exists and get updated version
+			const updatedTask = await this._findUpdatedTask(task);
+			if (updatedTask) {
+				await this.run(updatedTask);
+			} else {
+				// Task no longer exists, show warning
+				this._notificationService.warn(nls.localize('TaskSystem.taskNoLongerExists', 'Task {0} no longer exists or has been modified. Cannot restart.', task.configurationProperties.name));
+			}
+		} catch {
+			// eat the error, we don't care about it here
 		}
 	}
 
@@ -2219,6 +2228,20 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 				}
 			}
 		}
+
+		// If task wasn't found in workspace configuration, check contributed tasks from providers
+		// This is important for tasks from extensions like npm, which are ContributedTasks
+		if (ContributedTask.is(originalTask)) {
+			// The type filter ensures only the matching provider is called (e.g., only npm provider for npm tasks)
+			// This is the same pattern used in tryResolveTask as a fallback
+			const allTasks = await this.tasks({ type: originalTask.type });
+			for (const task of allTasks) {
+				if (task._id === originalTask._id) {
+					return task;
+				}
+			}
+		}
+
 		return undefined;
 	}
 
@@ -2261,6 +2284,17 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 				} else {
 					return undefined;
 				}
+			},
+			async (taskKey: string) => {
+				// Look up task by its map key across all workspace tasks
+				const taskMap = await this._getGroupedTasks();
+				const allTasks = taskMap.all();
+				for (const task of allTasks) {
+					if (task.getMapKey() === taskKey) {
+						return task;
+					}
+				}
+				return undefined;
 			}
 		);
 	}
@@ -2557,7 +2591,7 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 		return folder;
 	}
 
-	getTerminalsForTasks(task: (Task | Task[])): URI[] | undefined {
+	getTerminalsForTasks(task: Types.SingleOrMany<Task>): URI[] | undefined {
 		return this._taskSystem?.getTerminalsForTasks(task);
 	}
 
@@ -2629,7 +2663,7 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 			}
 		}
 		if (!this._jsonTasksSupported && (parseResult.custom.length > 0)) {
-			console.warn('Custom workspace tasks are not supported.');
+			this._logService.warn('Custom workspace tasks are not supported.');
 		}
 		return { workspaceFolder, set: { tasks: this._jsonTasksSupported ? parseResult.custom : [] }, configurations: customizedTasks, hasErrors };
 	}
@@ -2732,7 +2766,7 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 			}
 		}
 		if (!this._jsonTasksSupported && (parseResult.custom.length > 0)) {
-			console.warn('Custom workspace tasks are not supported.');
+			this._logService.warn('Custom workspace tasks are not supported.');
 		} else {
 			for (const task of parseResult.custom) {
 				custom.push(task);
@@ -3195,8 +3229,8 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 	}
 
 
-	rerun(terminalInstanceId: number): void {
-		const task = this._taskSystem?.getTaskForTerminal(terminalInstanceId);
+	async rerun(terminalInstanceId: number): Promise<void> {
+		const task = await this._taskSystem?.getTaskForTerminal(terminalInstanceId);
 		if (task) {
 			this._restart(task);
 		} else {
@@ -3363,7 +3397,7 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 						const globGroupTasks = await this._findWorkspaceTasks((task) => {
 							const currentTaskGroup = task.configurationProperties.group;
 							if (currentTaskGroup && typeof currentTaskGroup !== 'string' && typeof currentTaskGroup.isDefault === 'string') {
-								return (currentTaskGroup._id === taskGroupId && glob.match(currentTaskGroup.isDefault, relativePath));
+								return (currentTaskGroup._id === taskGroupId && glob.match(currentTaskGroup.isDefault, relativePath, { ignoreCase: true }));
 							}
 
 							globTasksDetected = false;
@@ -3397,7 +3431,7 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 		}, this._runConfigureDefaultTestTask, this._runTest);
 	}
 
-	private _runTerminateCommand(arg?: any): void {
+	private _runTerminateCommand(arg?: string | ITaskIdentifier): void {
 		if (arg === 'terminateAll') {
 			this._terminateAll();
 			return;
@@ -3464,7 +3498,7 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 		}
 	}
 
-	private async _runRestartTaskCommand(arg?: any): Promise<void> {
+	private async _runRestartTaskCommand(arg?: string | ITaskIdentifier): Promise<void> {
 
 		const activeTasks = await this.getActiveTasks();
 
@@ -3924,7 +3958,7 @@ export abstract class AbstractTaskService extends Disposable implements ITaskSer
 		if (!CustomTask.is(task)) {
 			return;
 		}
-		const configElement: any = {
+		const configElement: ITaskConfig = {
 			label: task._label
 		};
 		const oldTaskTypes = new Set(['gulp', 'jake', 'grunt']);
